@@ -111,6 +111,9 @@ void server_worker_loop(int commfd, char *launchreq) {
     // child.
     // we're done with m PTY
     close(ptym);
+    // child also no need to deal with commsock
+    close(commfd);
+
     // make s PTY our stdio!
     for (int i = 0; i <= 2; ++i) {
       if (dup2(ptys, i) != i)

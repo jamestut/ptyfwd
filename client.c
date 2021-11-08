@@ -18,7 +18,6 @@ int start_client(int fd) {
     set_fd_flags(i, true, O_NONBLOCK);
   }
 
-  // TODO: set stdio to raw mode!
   if (!set_tty_raw())
     err(1, "Error setting terminal to raw mode");
 
@@ -40,7 +39,7 @@ int start_client(int fd) {
       err(1, "Wait error");
     }
     for (int i = 0; i < readyfdcount; ++i) {
-      int destfd = !readyfds[i] ? fd : 1;
+      int destfd = readyfds[i] == fd ? 1 : fd;
       int rd = read(readyfds[i], rbuff, BUFF_SIZE);
       if (rd < 0)
         err(1, "Read error");

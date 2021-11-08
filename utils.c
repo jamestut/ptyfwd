@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
+bool rw_all(bool iswrite, int fd, const void *buff, UINT len);
+
 int set_fd_flags(int fd, bool set, int flags) {
   int fdflags = fcntl(fd, F_GETFL, 0);
   if (set)
@@ -16,37 +18,38 @@ int set_fd_flags(int fd, bool set, int flags) {
   return fcntl(fd, F_SETFL, fdflags);
 }
 
-bool write_all(int fd, const void *buff, UINT len) {
+bool write_all(int fd, const void *buff, UINT len) { return rw_all(true, fd, buff, len); }
+
+bool read_all(int fd, const void *buff, UINT len) { return rw_all(false, fd, buff, len); }
+
+bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
   static void *sinst = NULL;
-  static int prevfd;
-  struct wait_list wl = {.fd = fd, .wm = WM_WRITE};
+  struct wait_list wl = {.fd = fd, .wm = iswrite ? WM_WRITE : WM_READ};
   if (!sinst) {
     sinst = select_init(&wl, 1);
     if (!sinst)
-      errx(1, "write_all() init error");
+      errx(1, "rw_all() select init error");
   } else {
-    if (prevfd != fd) {
-      select_wl_change(sinst, 0, &wl);
-      prevfd = fd;
-    }
+    select_wl_change(sinst, 0, &wl);
   }
 
-  int written = 0;
-  while (written < len) {
+  int done = 0;
+  while (done < len) {
     int wfd;
     select_wait(sinst, &wfd);
-    int wr = write(wfd, (void *)((uintptr_t)buff + written), len - written);
-    if (wr < 0) {
+    int currdone = iswrite ? write(fd, (void *)((uintptr_t)buff + done), len - done)
+                           : read(fd, (void *)((uintptr_t)buff + done), len - done);
+    if (currdone < 0) {
       if (errno == EAGAIN)
         continue;
       return false;
     }
-    if (wr == 0) {
+    if (currdone == 0) {
       // EOF reached (?) but we haven't written everything
       errno = EIO;
       return false;
     }
-    written += wr;
+    done += currdone;
   }
 
   return true;
