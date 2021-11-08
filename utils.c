@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <assert.h>
 
 bool rw_all(bool iswrite, int fd, const void *buff, UINT len);
 
@@ -23,6 +24,10 @@ bool write_all(int fd, const void *buff, UINT len) { return rw_all(true, fd, buf
 bool read_all(int fd, const void *buff, UINT len) { return rw_all(false, fd, buff, len); }
 
 bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
+  // caller should not attempt to do this with len == 0
+  // if they did so, they must have forgotten to do EOF checks or things like that
+  assert(len);
+
   static void *sinst = NULL;
   struct wait_list wl = {.fd = fd, .wm = iswrite ? WM_WRITE : WM_READ};
   if (!sinst) {

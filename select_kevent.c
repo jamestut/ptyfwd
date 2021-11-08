@@ -48,8 +48,17 @@ bool select_wl_change(void *inst, UINT idx, struct wait_list *wl) {
     return false;
   }
   struct kevent_select *ks = inst;
-  int evfilt = (wl->wm & WM_READ) ? EVFILT_READ : 0;
-  evfilt |= (wl->wm & WM_WRITE) ? EVFILT_WRITE : 0;
+  int evfilt;
+  switch (wl->wm) {
+  case WM_READ:
+    evfilt = EVFILT_READ;
+    break;
+  case WM_WRITE:
+    evfilt = EVFILT_WRITE;
+    break;
+  default:
+    errx(1, "Invalid parameter");
+  }
   EV_SET(ks->kev + idx, wl->fd, evfilt, EV_ADD | EV_ENABLE, 0, 0, 0);
   return true;
 }

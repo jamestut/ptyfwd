@@ -29,7 +29,8 @@ int start_client(int fd) {
   if (!sinst)
     err(1, "select init error");
 
-  for (;;) {
+  bool has_error = false;
+  while(!has_error) {
     int readyfds[2];
     int readyfdcount = select_wait(sinst, readyfds);
     if (readyfdcount < 0) {
@@ -38,18 +39,32 @@ int start_client(int fd) {
         continue;
       err(1, "Wait error");
     }
+
+    has_error = false;
     for (int i = 0; i < readyfdcount; ++i) {
-      int destfd = readyfds[i] == fd ? 1 : fd;
-      int rd = read(readyfds[i], rbuff, BUFF_SIZE);
-      if (rd < 0)
-        err(1, "Read error");
-      // write entire buffer no matter what
-      if (!write_all(destfd, rbuff, rd))
-        err(1, "Write error");
+      int srcfd = readyfds[i];
+      int rd = read(srcfd, rbuff, BUFF_SIZE);
+      int destfd = srcfd == fd ? 1 : fd;
+      if (rd <= 0) {
+        if (rd < 0)
+          warn("Read error");
+        has_error = true;
+        break;
+      }
+
+      // read was more than 0
+      if (!write_all(destfd, rbuff, rd)) {
+        warn("Write error");
+        has_error = true;
+        break;
+      }
     }
   }
 
+  // fd = comm socket
+  close(fd);
   select_destroy(sinst);
+  return has_error;
 }
 
 bool set_tty_raw() {

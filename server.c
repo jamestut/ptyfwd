@@ -2,6 +2,7 @@
 #include "select.h"
 #include "socks.h"
 #include "utils.h"
+#include <assert.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -9,10 +10,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <unistd.h>
+#include <sys/socket.h>
 #include <termios.h>
+#include <unistd.h>
 
 #define LISTEN_BACKLOG 8
 #define BUFF_SIZE 4096
@@ -75,6 +76,7 @@ int start_server(struct fd_list *fds, const char *launchreq) {
         // no return
         char *launchreq_c = alloca(strlen(launchreq) + 1);
         strcpy(launchreq_c, launchreq);
+        // never return
         server_worker_loop(commfd, launchreq_c);
       }
     }
@@ -120,11 +122,11 @@ void server_worker_loop(int commfd, char *launchreq) {
 
     // this must be done in this exact order to make this process
     // as both session leader and controlling terminal
-    if(setsid() < 0)
+    if (setsid() < 0)
       err(1, "Error setting session leader");
-    if(ioctl(ptys, TIOCSCTTY, 0) < 0)
+    if (ioctl(ptys, TIOCSCTTY, 0) < 0)
       err(1, "Error setting controlling terminal");
-    if(tcsetpgrp(ptys, getpid()) < 0)
+    if (tcsetpgrp(ptys, getpid()) < 0)
       err(1, "Error setting foreground process group");
 
     // make s PTY our stdio!
@@ -151,7 +153,8 @@ void server_worker_loop(int commfd, char *launchreq) {
   void *rsinst = select_init(rwl, 2);
 
   int readyfds[2];
-  for (;;) {
+  bool has_error = false;
+  while(!has_error) {
     int readyfdscount = select_wait(rsinst, readyfds);
     if (readyfdscount < 0) {
       if (errno == EINTR) {
@@ -160,15 +163,31 @@ void server_worker_loop(int commfd, char *launchreq) {
       }
       err(1, "Wait error");
     }
+
+    has_error = false;
     for (int i = 0; i < readyfdscount; ++i) {
-      int destfd = readyfds[i] == ptym ? commfd : ptym;
-      int rd = read(readyfds[i], rbuff, BUFF_SIZE);
-      if (rd < 0)
-        err(1, "Read error");
-      // write entire buffer no matter what
-      if (!write_all(destfd, rbuff, rd))
-        err(1, "Write error");
+      int srcfd = readyfds[i];
+      int rd = read(srcfd, rbuff, BUFF_SIZE);
+      int destfd = srcfd == ptym ? commfd : ptym;
+      if (rd <= 0) {
+        if (rd < 0)
+          warn("Read error");
+        has_error = true;
+        break;
+      }
+
+      // read was more than 0
+      if (!write_all(destfd, rbuff, rd)) {
+        warn("Write error");
+        has_error = true;
+        break;
+      }
     }
   }
+
+  close(commfd);
+  close(ptym);
   select_destroy(rsinst);
+
+  exit(has_error);
 }
