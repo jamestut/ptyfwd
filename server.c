@@ -10,7 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+#include <termios.h>
 
 #define LISTEN_BACKLOG 8
 #define BUFF_SIZE 4096
@@ -100,19 +102,30 @@ void server_worker_loop(int commfd, char *launchreq) {
   if (!ptsnameres)
     err(1, "Error getting name for PTS");
   strcpy(pts_name, ptsnameres);
-  int ptys = open(pts_name, O_RDWR);
-  if (ptys < 0)
-    err(1, "Error opening PTS");
 
   pid_t pid = fork();
   if (pid < 0)
     err(1, "Error spawning process");
   if (!pid) {
     // child.
+
+    int ptys = open(pts_name, O_RDWR);
+    if (ptys < 0)
+      err(1, "Error opening PTS");
+
     // we're done with m PTY
     close(ptym);
     // child also no need to deal with commsock
     close(commfd);
+
+    // this must be done in this exact order to make this process
+    // as both session leader and controlling terminal
+    if(setsid() < 0)
+      err(1, "Error setting session leader");
+    if(ioctl(ptys, TIOCSCTTY, 0) < 0)
+      err(1, "Error setting controlling terminal");
+    if(tcsetpgrp(ptys, getpid()) < 0)
+      err(1, "Error setting foreground process group");
 
     // make s PTY our stdio!
     for (int i = 0; i <= 2; ++i) {
