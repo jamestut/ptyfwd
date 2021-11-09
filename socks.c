@@ -124,16 +124,17 @@ int create_uds_client(const char *path) {
   int s = socket(AF_UNIX, SOCK_STREAM, 0);
   if (s < 0)
     return -1;
-  set_fd_flags(s, true, O_NONBLOCK);
 
   struct sockaddr_un addr;
   addr.sun_family = AF_UNIX;
   strncpy(addr.sun_path, path, sizeof(addr.sun_path));
 
+  set_fd_flags(s, false, O_NONBLOCK);
   if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
     close(s);
     return -1;
   }
+  set_fd_flags(s, true, O_NONBLOCK);
 
   return s;
 }
