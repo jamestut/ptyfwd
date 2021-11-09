@@ -25,6 +25,11 @@ void *select_init(struct wait_list *wl, UINT fdscount) {
   }
 
   struct kevent_select *ret = malloc(sizeof(struct kevent_select));
+  if (!ret) {
+    warnx("malloc error");
+    close(kq);
+    return NULL;
+  }
   ret->kq = kq;
   ret->count = fdscount;
   for (int i = 0; i < fdscount; ++i)

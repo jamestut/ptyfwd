@@ -1,6 +1,6 @@
 CFLAGS=-O0 -g3 -Wall -D_GNU_SOURCE
 
-DEPS=app.o socks.o select_kevent.o server.o client.o utils.o protocol.o
+DEPS=app.o socks.o select_kevent.o select_epoll.o server.o client.o utils.o protocol.o
 
 ptyfwd: $(DEPS) Makefile
 	$(CC) $(CFLAGS) -o ptyfwd $(DEPS)

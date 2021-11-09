@@ -11,7 +11,7 @@
 
 static char rbuff[BUFF_SIZE];
 
-static bool set_tty_raw();
+static bool set_tty_raw(bool set);
 
 static void install_signal_handlers();
 
@@ -32,7 +32,7 @@ int start_client(int fd) {
 
   install_signal_handlers();
 
-  if (!set_tty_raw())
+  if (!set_tty_raw(true))
     err(1, "Error setting terminal to raw mode");
 
   // send current window size (if exists)
@@ -121,16 +121,30 @@ int start_client(int fd) {
   // fd = comm socket
   close(fd);
   select_destroy(sinst);
+  set_tty_raw(false);
   return errmsg ? 1 : 0;
 }
 
-static bool set_tty_raw() {
+static bool set_tty_raw(bool set) {
   int err;
+  static bool is_raw = false;
   struct termios tgt_termios;
-  struct termios curr_termios;
+  static struct termios curr_termios;
 
   // target STDIN
   int fd = 0;
+
+  if(set == is_raw)
+    return true;
+
+  if(is_raw && !set) {
+    // caller request reset (revert raw mode)
+    tcsetattr(fd, TCSAFLUSH, &curr_termios);
+    is_raw = false;
+    return true;
+  }
+
+  // from this point on, caller request term set to raw mode
 
   if (tcgetattr(fd, &curr_termios) < 0)
     return (-1);
@@ -187,6 +201,7 @@ static bool set_tty_raw() {
     return false;
   }
 
+  is_raw = true;
   return true;
 }
 

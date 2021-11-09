@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -22,6 +23,10 @@
 static void server_worker_loop(int commfd, char *launchreq);
 
 static void set_winsize(int fd, const struct winch_data *data);
+
+static void sighandler(int sig) {
+  return;
+}
 
 static char rbuff[BUFF_SIZE];
 
@@ -112,10 +117,17 @@ static void server_worker_loop(int commfd, char *launchreq) {
   if (ptys < 0)
     err(1, "Error opening sPTY");
 
-  pid_t pid = fork();
-  if (pid < 0)
+  // setup an empty handler for SIGCHLD so that select_wait can be interrupted when child dies
+  struct sigaction act = {0};
+  sigfillset(&act.sa_mask);
+  act.sa_handler = sighandler;
+  if(sigaction(SIGCHLD, &act, NULL) < 0)
+    warn("Install SIGCHLD handler failed");
+
+  pid_t childpid = fork();
+  if (childpid < 0)
     err(1, "Error spawning process");
-  if (!pid) {
+  if (!childpid) {
     // child.
 
     // we're done with mPTY
@@ -154,7 +166,6 @@ static void server_worker_loop(int commfd, char *launchreq) {
   rwl[1].fd = ptym;
   rwl[0].wm = rwl[1].wm = WM_READ;
   void *rsinst = select_init(rwl, 2);
-
   int readyfds[2];
   const char *errmsg = NULL;
   bool stop = false;
@@ -162,7 +173,10 @@ static void server_worker_loop(int commfd, char *launchreq) {
     int readyfdscount = select_wait(rsinst, readyfds);
     if (readyfdscount < 0) {
       if (errno == EINTR) {
-        // TODO: handle signal?
+        // we might be woken up because of SIGCHLD.
+        // If this is the case, stop!
+        if(waitpid(childpid, NULL, WNOHANG) > 0)
+          stop = true;
         continue;
       }
       errmsg = "Wait error";

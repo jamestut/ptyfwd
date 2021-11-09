@@ -141,15 +141,66 @@ int create_uds_client(const char *path) {
 
 #ifdef __linux
 
-// struct fd_list create_vsock_server(const char *cid, const char *port) {
-//   struct fd_list ret = {.count = 1};
-//   int s = socket(AF_VSOCK, SOCK_STREAM, 0);
-//   if (s < 0)
-//     ERROR("Error creating VSOCK");
+static uint32_t parse_uint32(const char *v) {
+  // return 0 if invalid
+  uint32_t ret;
+  int cnt = sscanf(v, "%u", &ret);
+  if (!cnt)
+    return 0;
+  return ret;
+}
 
-//   struct sockaddr_vm addr = {0};
-//   addr.svm_family = AF_UNIX;
-// }
+struct fd_list create_vsock_server(const char *s_cid, const char *s_port) {
+  uint32_t cid = parse_uint32(s_cid);
+  uint32_t port = parse_uint32(s_port);
+  if(!(cid && port)) {
+    warnx("Invalid parameter");
+    return (struct fd_list){0};
+  }
+
+  struct fd_list ret = {.count = 1};
+  int s = socket(AF_VSOCK, SOCK_STREAM, 0);
+  if (s < 0)
+    ERROR("Error creating VSOCK");
+
+  struct sockaddr_vm addr = {0};
+  addr.svm_family = AF_VSOCK;
+  addr.svm_cid = cid;
+  addr.svm_port = port;
+
+  if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    ERROR("Error binding socket");
+
+  ret.fds[0] = s;
+  return ret;
+}
+
+int create_vsock_client(const char *s_cid, const char *s_port) {
+  uint32_t cid = parse_uint32(s_cid);
+  uint32_t port = parse_uint32(s_port);
+  if(!(cid && port)) {
+    warnx("Invalid parameter");
+    return -1;
+  }
+
+  int s = socket(AF_VSOCK, SOCK_STREAM, 0);
+  if (s < 0)
+    return -1;
+
+  struct sockaddr_vm addr = {0};
+  addr.svm_family = AF_VSOCK;
+  addr.svm_cid = cid;
+  addr.svm_port = port;
+
+  set_fd_flags(s, false, O_NONBLOCK);
+  if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    close(s);
+    return -1;
+  }
+  set_fd_flags(s, true, O_NONBLOCK);
+
+  return s;
+}
 
 #endif
 
