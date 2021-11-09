@@ -1,3 +1,4 @@
+#include "protocol.h"
 #include "select.h"
 #include "utils.h"
 #include <err.h>
@@ -5,8 +6,6 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
-
-#define BUFF_SIZE 4096
 
 static char rbuff[BUFF_SIZE];
 
@@ -29,42 +28,70 @@ int start_client(int fd) {
   if (!sinst)
     err(1, "select init error");
 
-  bool has_error = false;
-  while(!has_error) {
+  const char *errmsg = NULL;
+  bool stop = false;
+  while (!(errmsg || stop)) {
     int readyfds[2];
     int readyfdcount = select_wait(sinst, readyfds);
     if (readyfdcount < 0) {
       if (errno == EINTR)
         // TODO: handle signal?
         continue;
-      err(1, "Wait error");
+      errmsg = "Wait error";
     }
 
-    has_error = false;
     for (int i = 0; i < readyfdcount; ++i) {
       int srcfd = readyfds[i];
-      int rd = read(srcfd, rbuff, BUFF_SIZE);
-      int destfd = srcfd == fd ? 1 : fd;
-      if (rd <= 0) {
-        if (rd < 0)
-          warn("Read error");
-        has_error = true;
-        break;
-      }
+      if (srcfd == fd) {
+        uint16_t rdlen;
+        enum data_type pdatatype;
+        if (!proto_read(fd, &rdlen, &pdatatype, rbuff)) {
+          errmsg = "Socket read error";
+          break;
+        }
 
-      // read was more than 0
-      if (!write_all(destfd, rbuff, rd)) {
-        warn("Write error");
-        has_error = true;
-        break;
+        switch (pdatatype) {
+        case DT_REGULAR:
+          if (!write_all(1, rbuff, rdlen))
+            errmsg = "stdout write error";
+          break;
+        case DT_CLOSE:
+          stop = true;
+          break;
+        default:
+          warnx("Unrecognized data type %d", pdatatype);
+          continue;
+        }
+      } else if (srcfd == 0) {
+        int rd = read(0, rbuff, BUFF_SIZE);
+        if (rd <= 0) {
+          if (rd < 0)
+            errmsg = "stdin read error";
+          stop = true;
+          break;
+        }
+
+        if (!proto_write(fd, rd, DT_REGULAR, rbuff)) {
+          errmsg = "Socket write error";
+          break;
+        }
+      } else {
+        errno = EINVAL;
+        errmsg = "unknown src fd";
       }
     }
   }
 
+  if (errmsg)
+    warn("%s", errmsg);
+
+  // don't forget to let server know if we're stopping
+  proto_write(fd, 0, DT_CLOSE, NULL);
+
   // fd = comm socket
   close(fd);
   select_destroy(sinst);
-  return has_error;
+  return errmsg ? 1 : 0;
 }
 
 bool set_tty_raw() {

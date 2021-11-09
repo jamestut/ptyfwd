@@ -1,12 +1,12 @@
 #include "utils.h"
 #include "select.h"
+#include <assert.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <assert.h>
 
 bool rw_all(bool iswrite, int fd, const void *buff, UINT len);
 
@@ -45,7 +45,7 @@ bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
     int currdone = iswrite ? write(fd, (void *)((uintptr_t)buff + done), len - done)
                            : read(fd, (void *)((uintptr_t)buff + done), len - done);
     if (currdone < 0) {
-      if (errno == EAGAIN)
+      if ((errno == EAGAIN) || (errno == EINTR))
         continue;
       return false;
     }

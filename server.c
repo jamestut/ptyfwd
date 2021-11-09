@@ -1,4 +1,5 @@
 #include "common.h"
+#include "protocol.h"
 #include "select.h"
 #include "socks.h"
 #include "utils.h"
@@ -16,9 +17,10 @@
 #include <unistd.h>
 
 #define LISTEN_BACKLOG 8
-#define BUFF_SIZE 4096
 
-void server_worker_loop(int commfd, char *launchreq);
+static void server_worker_loop(int commfd, char *launchreq);
+
+static void set_winsize(int fd, const struct winch_data *data);
 
 static char rbuff[BUFF_SIZE];
 
@@ -86,7 +88,7 @@ int start_server(struct fd_list *fds, const char *launchreq) {
   return 0;
 }
 
-void server_worker_loop(int commfd, char *launchreq) {
+static void server_worker_loop(int commfd, char *launchreq) {
   // controlling (m) pty
   int ptym = open("/dev/ptmx", O_RDWR);
   if (ptym < 0)
@@ -102,7 +104,7 @@ void server_worker_loop(int commfd, char *launchreq) {
   char pts_name[32];
   char *ptsnameres = ptsname(ptym);
   if (!ptsnameres)
-    err(1, "Error getting name for PTS");
+    err(1, "Error getting name for sPTY");
   strcpy(pts_name, ptsnameres);
 
   pid_t pid = fork();
@@ -113,9 +115,9 @@ void server_worker_loop(int commfd, char *launchreq) {
 
     int ptys = open(pts_name, O_RDWR);
     if (ptys < 0)
-      err(1, "Error opening PTS");
+      err(1, "Error opening sPTY");
 
-    // we're done with m PTY
+    // we're done with mPTY
     close(ptym);
     // child also no need to deal with commsock
     close(commfd);
@@ -129,10 +131,10 @@ void server_worker_loop(int commfd, char *launchreq) {
     if (tcsetpgrp(ptys, getpid()) < 0)
       err(1, "Error setting foreground process group");
 
-    // make s PTY our stdio!
+    // make sPTY our stdio!
     for (int i = 0; i <= 2; ++i) {
       if (dup2(ptys, i) != i)
-        err(1, "Error dup2 PTS to stdio");
+        err(1, "Error dup2 sPTY to stdio");
     }
 
     char *args[2] = {launchreq, NULL};
@@ -153,41 +155,77 @@ void server_worker_loop(int commfd, char *launchreq) {
   void *rsinst = select_init(rwl, 2);
 
   int readyfds[2];
-  bool has_error = false;
-  while(!has_error) {
+  const char *errmsg = NULL;
+  bool stop = false;
+  while (!(errmsg || stop)) {
     int readyfdscount = select_wait(rsinst, readyfds);
     if (readyfdscount < 0) {
       if (errno == EINTR) {
         // TODO: handle signal?
         continue;
       }
-      err(1, "Wait error");
+      errmsg = "Wait error";
     }
 
-    has_error = false;
     for (int i = 0; i < readyfdscount; ++i) {
       int srcfd = readyfds[i];
-      int rd = read(srcfd, rbuff, BUFF_SIZE);
-      int destfd = srcfd == ptym ? commfd : ptym;
-      if (rd <= 0) {
-        if (rd < 0)
-          warn("Read error");
-        has_error = true;
-        break;
-      }
+      if (srcfd == commfd) {
+        uint16_t rdlen;
+        enum data_type pdatatype;
+        if (!proto_read(commfd, &rdlen, &pdatatype, rbuff)) {
+          errmsg = "Socket read error";
+          break;
+        }
 
-      // read was more than 0
-      if (!write_all(destfd, rbuff, rd)) {
-        warn("Write error");
-        has_error = true;
-        break;
+        switch (pdatatype) {
+        case DT_WINCH:
+          set_winsize(ptym, (struct winch_data *)rbuff);
+          break;
+        case DT_REGULAR:
+          if (!write_all(ptym, rbuff, rdlen))
+            errmsg = "mPTY write error";
+          break;
+        case DT_CLOSE:
+          stop = true;
+          break;
+        default:
+          warnx("Unrecognized data type %d", pdatatype);
+          continue;
+        }
+      } else if (srcfd == ptym) {
+        int rd = read(ptym, rbuff, BUFF_SIZE);
+        if (rd <= 0) {
+          if (rd < 0)
+            errmsg = "mPTY read error";
+          stop = true;
+          break;
+        }
+
+        if (!proto_write(commfd, rd, DT_REGULAR, rbuff)) {
+          errmsg = "Socket write error";
+          break;
+        }
+      } else {
+        errno = EINVAL;
+        errmsg = "unknown src fd";
       }
     }
   }
+
+  if (errmsg)
+    warn("%s", errmsg);
+
+  // don't forget to let client know if we're stopping
+  proto_write(commfd, 0, DT_CLOSE, NULL);
 
   close(commfd);
   close(ptym);
   select_destroy(rsinst);
 
-  exit(has_error);
+  exit(errmsg ? 1 : 0);
+}
+
+static void set_winsize(int fd, const struct winch_data *data) {
+  struct winsize ws = {.ws_row = data->rows, .ws_col = data->cols};
+  ioctl(fd, TIOCSWINSZ, ws);
 }
