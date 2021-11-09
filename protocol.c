@@ -5,7 +5,7 @@
 #include <unistd.h>
 
 bool proto_read(int fd, uint16_t *length, enum data_type *type, void *buff) {
-  unsigned char hbuff[2];
+  unsigned char hbuff[2] = {0};
   // main header
   if (!read_all(fd, hbuff, 1))
     return false;

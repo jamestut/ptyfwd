@@ -52,7 +52,7 @@ int start_client(int fd) {
     int readyfds[2];
     int readyfdcount = select_wait(sinst, readyfds);
 
-    if(operparams.sighalt) {
+    if (operparams.sighalt) {
       warnx("Requested graceful stop");
       stop = true;
       break;
@@ -192,7 +192,7 @@ static bool set_tty_raw() {
 
 static void install_signal_handlers() {
   struct sigaction act = {0};
-  act.sa_mask = ~act.sa_mask;
+  sigfillset(&act.sa_mask);
   act.sa_handler = sighandler;
 
   int sig_to_handle[] = {SIGINT, SIGTERM, SIGWINCH, SIGHUP};
