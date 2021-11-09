@@ -7,11 +7,11 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -24,9 +24,7 @@ static void server_worker_loop(int commfd, char *launchreq);
 
 static void set_winsize(int fd, const struct winch_data *data);
 
-static void sighandler(int sig) {
-  return;
-}
+static void sighandler(int sig) { return; }
 
 static char rbuff[BUFF_SIZE];
 
@@ -121,7 +119,7 @@ static void server_worker_loop(int commfd, char *launchreq) {
   struct sigaction act = {0};
   sigfillset(&act.sa_mask);
   act.sa_handler = sighandler;
-  if(sigaction(SIGCHLD, &act, NULL) < 0)
+  if (sigaction(SIGCHLD, &act, NULL) < 0)
     warn("Install SIGCHLD handler failed");
 
   pid_t childpid = fork();
@@ -175,7 +173,7 @@ static void server_worker_loop(int commfd, char *launchreq) {
       if (errno == EINTR) {
         // we might be woken up because of SIGCHLD.
         // If this is the case, stop!
-        if(waitpid(childpid, NULL, WNOHANG) > 0)
+        if (waitpid(childpid, NULL, WNOHANG) > 0)
           stop = true;
         continue;
       }

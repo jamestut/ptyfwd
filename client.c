@@ -134,10 +134,10 @@ static bool set_tty_raw(bool set) {
   // target STDIN
   int fd = 0;
 
-  if(set == is_raw)
+  if (set == is_raw)
     return true;
 
-  if(is_raw && !set) {
+  if (is_raw && !set) {
     // caller request reset (revert raw mode)
     tcsetattr(fd, TCSAFLUSH, &curr_termios);
     is_raw = false;

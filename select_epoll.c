@@ -64,7 +64,8 @@ bool select_wl_change(void *inst, UINT idx, struct wait_list *wl) {
 
   struct epoll_event st;
   st.data.fd = wl->fd;
-  st.events = EPOLLERR | EPOLLRDHUP | EPOLLHUP | ((wl->wm & WM_READ) ? EPOLLIN : 0) | ((wl->wm & WM_WRITE) ? EPOLLOUT : 0);
+  st.events =
+      EPOLLERR | EPOLLRDHUP | EPOLLHUP | ((wl->wm & WM_READ) ? EPOLLIN : 0) | ((wl->wm & WM_WRITE) ? EPOLLOUT : 0);
   int stat = 0;
   int *prevfds = ret->fds + idx;
   if (*prevfds == wl->fd)

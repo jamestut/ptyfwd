@@ -20,9 +20,23 @@
     return (struct fd_list){0};                                                                                        \
   }
 
+static uint32_t parse_uint32(const char *v) {
+  // return 0 if invalid
+  uint32_t ret;
+  int cnt = sscanf(v, "%u", &ret);
+  if (!cnt)
+    return 0;
+  return ret;
+}
+
 struct fd_list create_tcp_server(const char *host, const char *port) {
   struct fd_list ret = {0};
   int st;
+
+  if (!(host && port)) {
+    warnx("Please specify address and port!");
+    return (struct fd_list){0};
+  }
 
   struct addrinfo addrhints;
   struct addrinfo *addrres;
@@ -71,6 +85,12 @@ int create_tcp_client(const char *host, const char *port) {
   struct addrinfo addrhints;
   struct addrinfo *addrres;
 
+  if (!(host && port)) {
+    warnx("Please specify address and port!");
+    errno = EINVAL;
+    return -1;
+  }
+
   memset(&addrhints, 0, sizeof(addrhints));
   addrhints.ai_family = PF_UNSPEC;
   addrhints.ai_socktype = SOCK_STREAM;
@@ -103,6 +123,11 @@ int create_tcp_client(const char *host, const char *port) {
 }
 
 struct fd_list create_uds_server(const char *path) {
+  if (!path) {
+    warnx("Please specify socket path!");
+    return (struct fd_list){0};
+  }
+
   struct fd_list ret = {.count = 1};
   int s = socket(AF_UNIX, SOCK_STREAM, 0);
   if (s < 0)
@@ -121,6 +146,12 @@ struct fd_list create_uds_server(const char *path) {
 }
 
 int create_uds_client(const char *path) {
+  if (!path) {
+    warnx("Please specify socket path!");
+    errno = EINVAL;
+    return -1;
+  }
+
   int s = socket(AF_UNIX, SOCK_STREAM, 0);
   if (s < 0)
     return -1;
@@ -141,19 +172,15 @@ int create_uds_client(const char *path) {
 
 #ifdef __linux
 
-static uint32_t parse_uint32(const char *v) {
-  // return 0 if invalid
-  uint32_t ret;
-  int cnt = sscanf(v, "%u", &ret);
-  if (!cnt)
-    return 0;
-  return ret;
-}
-
 struct fd_list create_vsock_server(const char *s_cid, const char *s_port) {
+  if (!(s_cid && s_port)) {
+    warnx("Please specify CID and port number!");
+    return (struct fd_list){0};
+  }
+
   uint32_t cid = parse_uint32(s_cid);
   uint32_t port = parse_uint32(s_port);
-  if(!(cid && port)) {
+  if (!(cid && port)) {
     warnx("Invalid parameter");
     return (struct fd_list){0};
   }
@@ -176,9 +203,15 @@ struct fd_list create_vsock_server(const char *s_cid, const char *s_port) {
 }
 
 int create_vsock_client(const char *s_cid, const char *s_port) {
+  if (!(s_cid && s_port)) {
+    warnx("Please specify CID and port number!");
+    errno = EINVAL;
+    return -1;
+  }
+
   uint32_t cid = parse_uint32(s_cid);
   uint32_t port = parse_uint32(s_port);
-  if(!(cid && port)) {
+  if (!(cid && port)) {
     warnx("Invalid parameter");
     return -1;
   }
@@ -205,13 +238,15 @@ int create_vsock_client(const char *s_cid, const char *s_port) {
 #endif
 
 int create_vsock_mult_client(const char *path, const char *s_cid, const char *s_port) {
-  UINT cid, port;
-  if (!sscanf("%u", s_cid, &cid)) {
-    warnx("Invalid CID value");
+  if (!(path && s_cid && s_port)) {
+    warnx("Please specify multiplexer path, CID, and port number!");
     goto err_inval;
   }
-  if (!sscanf("%u", s_port, &port)) {
-    warnx("Invalid port value");
+
+  uint32_t cid = parse_uint32(s_cid);
+  uint32_t port = parse_uint32(s_port);
+  if (!(cid && port)) {
+    warnx("Invalid parameter");
     goto err_inval;
   }
 
