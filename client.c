@@ -4,13 +4,25 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
 static char rbuff[BUFF_SIZE];
 
-bool set_tty_raw();
+static bool set_tty_raw();
+
+static void install_signal_handlers();
+
+static void sighandler(int sig);
+
+static void send_window_size(int commfd);
+
+static struct {
+  bool winch;
+  bool sighalt;
+} operparams = {0};
 
 int start_client(int fd) {
   // nonblocking for stdio (we don't use stderr at the moment)
@@ -18,15 +30,13 @@ int start_client(int fd) {
     set_fd_flags(i, true, O_NONBLOCK);
   }
 
+  install_signal_handlers();
+
   if (!set_tty_raw())
     err(1, "Error setting terminal to raw mode");
 
   // send current window size (if exists)
-  struct winsize winsz;
-  if (ioctl(0, TIOCGWINSZ, &winsz) >= 0) {
-    struct winch_data wd = {.rows = winsz.ws_row, .cols = winsz.ws_col};
-    proto_write(fd, sizeof(wd), DT_WINCH, &wd);
-  }
+  send_window_size(fd);
 
   struct wait_list wl[2];
   wl[0].fd = fd;
@@ -41,9 +51,19 @@ int start_client(int fd) {
   while (!(errmsg || stop)) {
     int readyfds[2];
     int readyfdcount = select_wait(sinst, readyfds);
+
+    if(operparams.sighalt) {
+      warnx("Requested graceful stop");
+      stop = true;
+      break;
+    }
+    if (operparams.winch) {
+      operparams.winch = false;
+      send_window_size(fd);
+    }
+
     if (readyfdcount < 0) {
       if (errno == EINTR)
-        // TODO: handle signal?
         continue;
       errmsg = "Wait error";
     }
@@ -104,7 +124,7 @@ int start_client(int fd) {
   return errmsg ? 1 : 0;
 }
 
-bool set_tty_raw() {
+static bool set_tty_raw() {
   int err;
   struct termios tgt_termios;
   struct termios curr_termios;
@@ -168,4 +188,37 @@ bool set_tty_raw() {
   }
 
   return true;
+}
+
+static void install_signal_handlers() {
+  struct sigaction act = {0};
+  act.sa_mask = ~act.sa_mask;
+  act.sa_handler = sighandler;
+
+  int sig_to_handle[] = {SIGINT, SIGTERM, SIGWINCH, SIGHUP};
+  for (int i = 0; i < sizeof(sig_to_handle) / sizeof(int); ++i) {
+    if (sigaction(sig_to_handle[i], &act, NULL) < 0)
+      err(1, "Error installing handler for signal %d", sig_to_handle[i]);
+  }
+}
+
+static void sighandler(int sig) {
+  switch (sig) {
+  case SIGINT:
+  case SIGTERM:
+  case SIGHUP:
+    operparams.sighalt = true;
+    break;
+  case SIGWINCH:
+    operparams.winch = true;
+    break;
+  }
+}
+
+static void send_window_size(int commfd) {
+  struct winsize winsz;
+  if (ioctl(0, TIOCGWINSZ, &winsz) >= 0) {
+    struct winch_data wd = {.rows = winsz.ws_row, .cols = winsz.ws_col};
+    proto_write(commfd, sizeof(wd), DT_WINCH, &wd);
+  }
 }
