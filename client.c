@@ -4,6 +4,7 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -19,6 +20,13 @@ int start_client(int fd) {
 
   if (!set_tty_raw())
     err(1, "Error setting terminal to raw mode");
+
+  // send current window size (if exists)
+  struct winsize winsz;
+  if (ioctl(0, TIOCGWINSZ, &winsz) >= 0) {
+    struct winch_data wd = {.rows = winsz.ws_row, .cols = winsz.ws_col};
+    proto_write(fd, sizeof(wd), DT_WINCH, &wd);
+  }
 
   struct wait_list wl[2];
   wl[0].fd = fd;
@@ -57,6 +65,8 @@ int start_client(int fd) {
           break;
         case DT_CLOSE:
           stop = true;
+          break;
+        case DT_NONE:
           break;
         default:
           warnx("Unrecognized data type %d", pdatatype);

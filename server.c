@@ -107,15 +107,15 @@ static void server_worker_loop(int commfd, char *launchreq) {
     err(1, "Error getting name for sPTY");
   strcpy(pts_name, ptsnameres);
 
+  int ptys = open(pts_name, O_RDWR);
+  if (ptys < 0)
+    err(1, "Error opening sPTY");
+
   pid_t pid = fork();
   if (pid < 0)
     err(1, "Error spawning process");
   if (!pid) {
     // child.
-
-    int ptys = open(pts_name, O_RDWR);
-    if (ptys < 0)
-      err(1, "Error opening sPTY");
 
     // we're done with mPTY
     close(ptym);
@@ -179,7 +179,7 @@ static void server_worker_loop(int commfd, char *launchreq) {
 
         switch (pdatatype) {
         case DT_WINCH:
-          set_winsize(ptym, (struct winch_data *)rbuff);
+          set_winsize(ptys, (struct winch_data *)rbuff);
           break;
         case DT_REGULAR:
           if (!write_all(ptym, rbuff, rdlen))
@@ -187,6 +187,8 @@ static void server_worker_loop(int commfd, char *launchreq) {
           break;
         case DT_CLOSE:
           stop = true;
+          break;
+        case DT_NONE:
           break;
         default:
           warnx("Unrecognized data type %d", pdatatype);
@@ -227,5 +229,6 @@ static void server_worker_loop(int commfd, char *launchreq) {
 
 static void set_winsize(int fd, const struct winch_data *data) {
   struct winsize ws = {.ws_row = data->rows, .ws_col = data->cols};
-  ioctl(fd, TIOCSWINSZ, ws);
+  if (ioctl(fd, TIOCSWINSZ, &ws) < 0)
+    warn("Set window size error");
 }
