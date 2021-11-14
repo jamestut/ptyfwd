@@ -1,9 +1,9 @@
 #include "protocol.h"
-#include "select.h"
 #include "utils.h"
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -38,20 +38,14 @@ int start_client(int fd) {
   // send current window size (if exists)
   send_window_size(fd);
 
-  struct wait_list wl[2];
-  wl[0].fd = fd;
-  wl[1].fd = 0; // stdin
-  wl[0].wm = wl[1].wm = WM_READ;
-  void *sinst = select_init(wl, 2);
-  if (!sinst)
-    err(1, "select init error");
+  struct pollfd pfds[2];
+  pfds[0].fd = fd;
+  pfds[1].fd = 0; // stdin
+  pfds[0].events = pfds[1].events = POLLIN;
 
   const char *errmsg = NULL;
   bool stop = false;
   while (!(errmsg || stop)) {
-    int readyfds[2];
-    int readyfdcount = select_wait(sinst, readyfds);
-
     if (operparams.sighalt) {
       warnx("Requested graceful stop");
       stop = true;
@@ -62,14 +56,16 @@ int start_client(int fd) {
       send_window_size(fd);
     }
 
-    if (readyfdcount < 0) {
+    if (poll(pfds, 2, -1) < 0) {
       if (errno == EINTR)
         continue;
       errmsg = "Wait error";
     }
 
-    for (int i = 0; i < readyfdcount; ++i) {
-      int srcfd = readyfds[i];
+    for (int i = 0; i < 2; ++i) {
+      if (!(pfds[i].revents & (POLLIN | POLLERR)))
+        continue;
+      int srcfd = pfds[i].fd;
       if (srcfd == fd) {
         uint16_t rdlen;
         enum data_type pdatatype;
@@ -120,7 +116,6 @@ int start_client(int fd) {
 
   // fd = comm socket
   close(fd);
-  select_destroy(sinst);
   set_tty_raw(false);
   return errmsg ? 1 : 0;
 }

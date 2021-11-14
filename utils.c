@@ -1,9 +1,9 @@
 #include "utils.h"
-#include "select.h"
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,33 +29,32 @@ bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
   // if they did so, they must have forgotten to do EOF checks or things like that
   assert(len);
 
-  static void *sinst = NULL;
-  struct wait_list wl = {.fd = fd, .wm = iswrite ? WM_WRITE : WM_READ};
-  if (!sinst) {
-    sinst = select_init(&wl, 1);
-    if (!sinst)
-      errx(1, "rw_all() select init error");
-  } else {
-    select_wl_change(sinst, 0, &wl);
-  }
-
   int done = 0;
   while (done < len) {
-    int wfd;
-    select_wait(sinst, &wfd);
     int currdone = iswrite ? write(fd, (void *)((uintptr_t)buff + done), len - done)
                            : read(fd, (void *)((uintptr_t)buff + done), len - done);
     if (currdone < 0) {
-      if ((errno == EAGAIN) || (errno == EINTR))
+      if (errno == EINTR)
         continue;
-      return false;
-    }
-    if (currdone == 0) {
+      else if (errno == EAGAIN) {
+        struct pollfd pfds = {.fd = fd, .events = iswrite ? POLLOUT : POLLIN};
+        // no need to check the result. we'll simply try to read/write again.
+        // if this poll exits prematurely, we'll get EAGAIN and do this again.
+        for (;;) {
+          if (poll(&pfds, 1, -1) < 0) {
+            if (errno != EINTR)
+              return false;
+          } else
+            break;
+        }
+      } else
+        return false;
+    } else if (currdone == 0) {
       // EOF reached (?) but we haven't written everything
       errno = EIO;
       return false;
-    }
-    done += currdone;
+    } else
+      done += currdone;
   }
 
   return true;
