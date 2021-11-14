@@ -63,7 +63,7 @@ int start_client(int fd) {
     }
 
     for (int i = 0; i < 2; ++i) {
-      if (!(pfds[i].revents & (POLLIN | POLLERR)))
+      if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP)))
         continue;
       int srcfd = pfds[i].fd;
       if (srcfd == fd) {

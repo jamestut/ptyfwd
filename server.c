@@ -24,8 +24,6 @@ static void server_worker_loop(int commfd, char *launchreq);
 
 static void set_winsize(int fd, const struct winch_data *data);
 
-static void sighandler(int sig) { return; }
-
 static char rbuff[BUFF_SIZE];
 
 int start_server(int svrfd, const char *launchreq) {
@@ -93,13 +91,6 @@ static void server_worker_loop(int commfd, char *launchreq) {
   if (ptys < 0)
     err(1, "Error opening sPTY");
 
-  // setup an empty handler for SIGCHLD so that select_wait can be interrupted when child dies
-  struct sigaction act = {0};
-  sigfillset(&act.sa_mask);
-  act.sa_handler = sighandler;
-  if (sigaction(SIGCHLD, &act, NULL) < 0)
-    warn("Install SIGCHLD handler failed");
-
   pid_t childpid = fork();
   if (childpid < 0)
     err(1, "Error spawning process");
@@ -131,6 +122,8 @@ static void server_worker_loop(int commfd, char *launchreq) {
       err(1, "exec error");
   }
 
+  close(ptys);
+
   // parent
   // this loop basically:
   // - read remote, write to PTM
@@ -149,7 +142,7 @@ static void server_worker_loop(int commfd, char *launchreq) {
     }
 
     for (int i = 0; i < 2; ++i) {
-      if (!(pfds[i].revents & (POLLIN | POLLERR)))
+      if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP)))
         continue;
       int srcfd = pfds[i].fd;
       if (srcfd == commfd) {
@@ -162,7 +155,7 @@ static void server_worker_loop(int commfd, char *launchreq) {
 
         switch (pdatatype) {
         case DT_WINCH:
-          set_winsize(ptys, (struct winch_data *)rbuff);
+          set_winsize(ptym, (struct winch_data *)rbuff);
           break;
         case DT_REGULAR:
           if (!write_all(ptym, rbuff, rdlen))
