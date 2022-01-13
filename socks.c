@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <linux/vm_sockets.h>
@@ -53,7 +55,12 @@ int create_tcp_server(bool ipv6, const char *host, const char *port) {
     }
 
     int val = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) < 0) {
+      warn("Error setting REUSEADDR on TCP socket");
+    }
+    if (setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val)) < 0) {
+      warn("Error setting TCP_NODELAY");
+    }
 
     if (bind(s, res->ai_addr, res->ai_addrlen) < 0) {
       warn("Error binding socket");
@@ -96,6 +103,11 @@ int create_tcp_client(bool ipv6, const char *host, const char *port) {
     s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (s < 0)
       continue;
+
+    int val = 1;
+    if (setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val)) < 0) {
+      warn("Error setting TCP_NODELAY");
+    }
 
     if (connect(s, res->ai_addr, res->ai_addrlen) < 0) {
       close(s);
