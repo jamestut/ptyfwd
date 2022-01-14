@@ -1,5 +1,6 @@
 #include "protocol.h"
 #include "utils.h"
+#include "global.h"
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -8,6 +9,8 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+#include <string.h>
+#include <openssl/sha.h>
 
 static char rbuff[BUFF_SIZE];
 
@@ -19,6 +22,8 @@ static void sighandler(int sig);
 
 static void send_window_size(int commfd);
 
+static bool negotiate(int fd);
+
 static struct {
   bool winch;
   bool sighalt;
@@ -28,6 +33,11 @@ int start_client(int fd) {
   // nonblocking for stdio (we don't use stderr at the moment)
   for (int i = 0; i <= 1; ++i) {
     set_fd_flags(i, true, O_NONBLOCK);
+  }
+
+  if (!negotiate(fd)) {
+    warnx("Server negotiation failed.");
+    return 1;
   }
 
   install_signal_handlers();
@@ -230,5 +240,81 @@ static void send_window_size(int commfd) {
   if (ioctl(0, TIOCGWINSZ, &winsz) >= 0) {
     struct winch_data wd = {.rows = winsz.ws_row, .cols = winsz.ws_col};
     proto_write(commfd, sizeof(wd), DT_WINCH, &wd);
+  }
+}
+
+static bool negotiate(int fd) {
+  uint16_t recv_len;
+  enum data_type recv_type;
+
+  if (!proto_read(fd, &recv_len, &recv_type, rbuff)) {
+    warn("Error receiving server preamble");
+    return false;
+  }
+  if (recv_len != sizeof(preamble) && recv_type != DT_PREAMBLE) {
+    warnx("Got unknown preamble from server.");
+    return false;
+  }
+
+  if (memcmp(rbuff, preamble, sizeof(preamble))) {
+    warnx("Invalid server version!");
+    return false;
+  }
+
+  // OK, send preamble back
+  proto_write(fd, sizeof(preamble), DT_PREAMBLE, preamble);
+
+  // authentication phase
+  if (!proto_read(fd, &recv_len, &recv_type, rbuff)) {
+    warn("Error receiving authentication request.");
+    return false;
+  }
+
+  if (recv_type == DT_NONE) {
+    // server does not require authentication
+    if (cookie.size) {
+      warnx("Warning: server does not require authentication.");
+    }
+    return true;
+  } else if (recv_type == DT_AUTH) {
+    if (!cookie.size) {
+      warnx("Server requires authentication. Please supply cookie file.");
+      return false;
+    }
+
+    if (recv_len != NONCE_SIZE) {
+      warnx("Invalid nonce size.");
+      return false;
+    }
+
+    // generate answer
+    uint8_t answer[ANSWER_SIZE];
+    SHA_CTX shactx;
+    int sharesult = 1;
+    sharesult &= SHA1_Init(&shactx);
+    sharesult &= SHA1_Update(&shactx, rbuff, NONCE_SIZE);
+    sharesult &= SHA1_Update(&shactx, cookie.data, cookie.size);
+    sharesult &= SHA1_Final(answer, &shactx);
+
+    proto_write(fd, ANSWER_SIZE, DT_AUTH, answer);
+
+    if (!proto_read(fd, &recv_len, &recv_type, rbuff)) {
+      warnx("Error reading authentication result.");
+      return false;
+    }
+    switch (recv_type) {
+      case DT_CLOSE:
+        warnx("Access denied!");
+        return false;
+      case DT_NONE:
+        // access granted!
+        return true;
+      default:
+        warnx("Invalid server response.");
+        return false;
+    }
+  } else {
+    warnx("Server sent unknown response.");
+    return false;
   }
 }

@@ -11,3 +11,5 @@ struct cookie {
 };
 
 extern struct cookie cookie;
+
+extern const uint8_t preamble[8];
