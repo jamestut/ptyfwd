@@ -1,16 +1,20 @@
 #include "common.h"
+#include "global.h"
 #include "socks.h"
 #include <err.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 enum conn_mode { CM_NONE, CM_TCP, CM_TCP6, CM_UDS, CM_VSOCK, CM_VSOCKMULT };
 
 int start_server(int svrfd, const char *launchreq);
 
 int start_client(int fd);
+
+static bool read_cookie(const char *cookiefile);
 
 int main(int argc, char **argv) {
   bool servermode = false;
@@ -19,9 +23,10 @@ int main(int argc, char **argv) {
   char *cid = NULL;
   char *port = NULL;
   char *launchreq = NULL;
+  char *cookiefile = NULL;
 
   char c;
-  while ((c = getopt(argc, argv, "s:ch:u:v:p:")) != EOF) {
+  while ((c = getopt(argc, argv, "s:c:h:u:v:p:")) != EOF) {
     switch (c) {
     case 's':
       servermode = true;
@@ -60,8 +65,21 @@ int main(int argc, char **argv) {
         goto usage;
       cid = optarg;
       break;
+    case 'c':
+      cookiefile = optarg;
+      break;
     default:
       goto usage;
+    }
+  }
+
+  if (cookiefile) {
+    if (!read_cookie(cookiefile)) {
+      return 1;
+    }
+  } else {
+    if (servermode) {
+      warnx("WARNING! Server is running without authentication!");
     }
   }
 
@@ -131,5 +149,44 @@ usage:
   puts("  Plain VSOCK without multiplexer is supported only on Linux.");
   puts(" -p <port>");
   puts("  Specify port number.");
+  puts(" -c <cookiefile>");
+  puts("  Enables authentication and specify a cookie file for authentication.");
+  printf("  Cookie file must be within %u and %u bytes in size.\n", COOKIE_MIN_SIZE,
+    COOKIE_MAX_SIZE);
   return 0;
+}
+
+static bool read_cookie(const char *cookiefile) {
+  int fd = open(cookiefile, O_RDONLY);
+  if (fd < 0) {
+    warn("Cannot open cookie file");
+    return false;
+  }
+
+  bool success = false;
+  int rd;
+  if ((rd = read(fd, cookie.data, COOKIE_MAX_SIZE)) < 0) {
+    warn("Error reading cookie file");
+    goto end;
+  }
+
+  if (rd < COOKIE_MIN_SIZE) {
+    warnx("Cookie file too small.");
+    goto end;
+  }
+  if (rd == COOKIE_MAX_SIZE) {
+    // see if the supplied file is bigger than what we expected
+    char dummy;
+    if (read(fd, &dummy, sizeof(dummy)) > 0) {
+      warnx("Cookie file too big.");
+      goto end;
+    }
+  }
+
+  cookie.size = rd;
+  success = true;
+
+end:
+  close(fd);
+  return success;
 }
