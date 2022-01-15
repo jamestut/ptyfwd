@@ -4,8 +4,8 @@
 #include <unistd.h>
 #include <string.h>
 
-#define HASHMAP_SIZE 2
-#define MAX_SESSIONS 32
+#define HASHMAP_SIZE 128
+#define MAX_SESSIONS 1024
 
 typedef struct session_node session_node_t;
 
