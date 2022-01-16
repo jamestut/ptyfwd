@@ -2,7 +2,9 @@
 #include "utils.h"
 #include "global.h"
 #include "serverclient.h"
+#include "session.h"
 #include <err.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -21,25 +23,57 @@ static void install_signal_handlers();
 
 static void sighandler(int sig);
 
-static void send_window_size(int commfd);
+static void send_window_size();
 
-static bool negotiate(int fd);
+static bool negotiate();
 
+static void query_sessid();
+
+static int client_loop();
+
+static void handle_pollin_sock();
+
+static void handle_pollin_stdin();
+
+static bool client_write(uint16_t len, enum data_type type, void *buff);
+
+static bool client_read(uint16_t *len, enum data_type *type, void *buff);
+
+static bool client_rw(bool write, uint16_t *len, enum data_type *type, void *buff);
+
+// signal handler flags
 static struct {
   bool winch;
   bool sighalt;
 } operparams = {0};
 
-int start_client(int fd) {
+static struct {
+  struct client_conn_options clopt;
+  int fd;
+  uint64_t sessid;
+  const char *errmsg;
+  bool stop_loop;
+} client;
+
+int start_client(struct client_conn_options clopt) {
+  client.sessid = INVALID_SESSION_ID;
+  client.fd = create_client(&clopt);
+  if (client.fd < 0) {
+    err(1, "Error connecting to server");
+  }
+  // to support reconnection
+  client.clopt = clopt;
+
   // nonblocking for stdio (we don't use stderr at the moment)
   for (int i = 0; i <= 1; ++i) {
     set_fd_flags(i, true, O_NONBLOCK);
   }
 
-  if (!negotiate(fd)) {
+  if (!negotiate()) {
     warnx("Server negotiation failed.");
     return 1;
   }
+  query_sessid();
 
   install_signal_handlers();
 
@@ -47,88 +81,9 @@ int start_client(int fd) {
     err(1, "Error setting terminal to raw mode");
 
   // send current window size (if exists)
-  send_window_size(fd);
+  send_window_size();
 
-  struct pollfd pfds[2];
-  pfds[0].fd = fd;
-  pfds[1].fd = 0; // stdin
-  pfds[0].events = pfds[1].events = POLLIN;
-
-  const char *errmsg = NULL;
-  bool stop = false;
-  while (!(errmsg || stop)) {
-    if (operparams.sighalt) {
-      warnx("Requested graceful stop");
-      stop = true;
-      break;
-    }
-    if (operparams.winch) {
-      operparams.winch = false;
-      send_window_size(fd);
-    }
-
-    if (poll(pfds, 2, -1) < 0) {
-      if (errno == EINTR)
-        continue;
-      errmsg = "Wait error";
-    }
-
-    for (int i = 0; i < 2; ++i) {
-      if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP)))
-        continue;
-      int srcfd = pfds[i].fd;
-      if (srcfd == fd) {
-        uint16_t rdlen;
-        enum data_type pdatatype;
-        if (!proto_read(fd, &rdlen, &pdatatype, rbuff)) {
-          errmsg = "Socket read error";
-          break;
-        }
-
-        switch (pdatatype) {
-        case DT_REGULAR:
-          if (!write_all(1, rbuff, rdlen))
-            errmsg = "stdout write error";
-          break;
-        case DT_CLOSE:
-          stop = true;
-          break;
-        case DT_NONE:
-          break;
-        default:
-          warnx("Unrecognized data type %d", pdatatype);
-          continue;
-        }
-      } else if (srcfd == 0) {
-        int rd = read(0, rbuff, BUFF_SIZE);
-        if (rd <= 0) {
-          if (rd < 0)
-            errmsg = "stdin read error";
-          stop = true;
-          break;
-        }
-
-        if (!proto_write(fd, rd, DT_REGULAR, rbuff)) {
-          errmsg = "Socket write error";
-          break;
-        }
-      } else {
-        errno = EINVAL;
-        errmsg = "unknown src fd";
-      }
-    }
-  }
-
-  if (errmsg)
-    warn("%s", errmsg);
-
-  // don't forget to let server know if we're stopping
-  proto_write(fd, 0, DT_CLOSE, NULL);
-
-  // fd = comm socket
-  close(fd);
-  set_tty_raw(false);
-  return errmsg ? 1 : 0;
+  return client_loop();
 }
 
 static bool set_tty_raw(bool set) {
@@ -237,15 +192,16 @@ static void sighandler(int sig) {
   }
 }
 
-static void send_window_size(int commfd) {
+static void send_window_size() {
   struct winsize winsz;
   if (ioctl(0, TIOCGWINSZ, &winsz) >= 0) {
     struct winch_data wd = {.rows = winsz.ws_row, .cols = winsz.ws_col};
-    proto_write(commfd, sizeof(wd), DT_WINCH, &wd);
+    client_write(sizeof(wd), DT_WINCH, &wd);
   }
 }
 
-static bool negotiate(int fd) {
+static bool negotiate() {
+  int fd = client.fd;
   uint16_t recv_len;
   enum data_type recv_type;
 
@@ -305,18 +261,169 @@ static bool negotiate(int fd) {
       return false;
     }
     switch (recv_type) {
-      case DT_CLOSE:
-        warnx("Access denied!");
-        return false;
-      case DT_NONE:
-        // access granted!
-        return true;
-      default:
-        warnx("Invalid server response.");
-        return false;
+    case DT_CLOSE:
+      warnx("Access denied!");
+      return false;
+    case DT_NONE:
+      // access granted!
+      return true;
+    default:
+      warnx("Invalid server response.");
+      return false;
     }
   } else {
     warnx("Server sent unknown response.");
     return false;
   }
+}
+
+static void query_sessid() {
+  uint16_t recv_len;
+  enum data_type recv_type;
+
+  // tell the server that this is a brand new session
+  proto_write(client.fd, 0, DT_SESSID, NULL);
+
+  // retrieve our persistent session ID if any
+  // we'll use this for reconnection in case it is dropped
+  if (!proto_read(client.fd, &recv_len, &recv_type, rbuff)) {
+    warn("Error receiving persistent session ID");
+    return;
+  }
+
+  if (recv_type != DT_SESSID) {
+    warnx("Received unexpected type while retreiving session ID.");
+  }
+  if (recv_len) {
+    if (recv_len != SESSID_SIZE) {
+      warnx("Invalid session ID size. Persistent session won't be enabled.");
+    }
+    memcpy(&client.sessid, rbuff, SESSID_SIZE);
+  }
+}
+
+static int client_loop() {
+  struct pollfd pfds[2];
+  pfds[0].fd = client.fd;
+  pfds[1].fd = 0; // stdin
+  pfds[0].events = pfds[1].events = POLLIN;
+
+  while (!(client.errmsg || client.stop_loop)) {
+    if (operparams.sighalt) {
+      warnx("Requested graceful stop");
+      client.stop_loop = true;
+      break;
+    }
+    if (operparams.winch) {
+      operparams.winch = false;
+      send_window_size();
+    }
+
+    if (poll(pfds, 2, -1) < 0) {
+      if (errno == EINTR)
+        continue;
+      client.errmsg = "Wait error";
+    }
+
+    for (int i = 0; i < 2; ++i) {
+      if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP)))
+        continue;
+      int srcfd = pfds[i].fd;
+      if (srcfd == client.fd) {
+        handle_pollin_sock();
+      } else if (srcfd == 0) {
+        handle_pollin_stdin();
+      } else {
+        // must be a bug
+        errno = EINVAL;
+        client.errmsg = "unknown source FD.";
+      }
+    }
+  }
+
+  if (client.errmsg)
+    warn("%s", client.errmsg);
+
+  // don't forget to let server know if we're stopping
+  proto_write(client.fd, 0, DT_CLOSE, NULL);
+
+  // fd = comm socket
+  close(client.fd);
+  set_tty_raw(false);
+  return client.errmsg ? 1 : 0;
+}
+
+static void handle_pollin_sock() {
+  uint16_t rdlen;
+  enum data_type pdatatype;
+  if (!client_read(&rdlen, &pdatatype, rbuff)) {
+    return;
+  }
+
+  switch (pdatatype) {
+  case DT_REGULAR:
+    // forward to stdout
+    if (!write_all(1, rbuff, rdlen)) {
+      client.errmsg = "stdout write error";
+    }
+    break;
+  case DT_CLOSE:
+    client.stop_loop = true;
+    break;
+  case DT_NONE:
+    break;
+  default:
+    warnx("Got unrecognized data type from server: %d", pdatatype);
+    break;
+  }
+}
+
+static void handle_pollin_stdin() {
+  int rd = read(0, rbuff, BUFF_SIZE);
+  if (rd <= 0) {
+    if (rd < 0)
+      client.errmsg = "stdin read error";
+    client.stop_loop = true;
+  }
+  client_write(rd, DT_REGULAR, rbuff);
+}
+
+static bool client_write(uint16_t len, enum data_type type, void *buff) {
+  return client_rw(true, &len, &type, buff);
+}
+
+static bool client_read(uint16_t *len, enum data_type *type, void *buff) {
+  return client_rw(false, len, type, buff);
+}
+
+static bool client_rw(bool write, uint16_t *len, enum data_type *type, void *buff) {
+  bool status = false;
+  do {
+    if (client.fd >= 0) {
+      if (write) {
+        status = proto_write(client.fd, *len, *type, buff);
+      } else {
+        status = proto_read(client.fd, len, type, buff);
+      }
+    }
+
+    if (!status) {
+      if (client.sessid != INVALID_SESSION_ID) {
+        warnx("Connection to server failed. Retrying ...");
+        close(client.fd);
+        client.fd = create_client(&client.clopt);
+        if (client.fd < 0) {
+          // wait a while before we retry to avoid spinning
+          sleep(1);
+        }
+      } else {
+        client.errmsg = "Connection to server failed and there is no persistent session ID.";
+        return false;
+      }
+    }
+  } while (!status);
+
+  // OK
+  assert(status);
+  return true;
 }

@@ -3,6 +3,8 @@
 #include "common.h"
 #include <stdbool.h>
 
+enum conn_mode { CM_NONE, CM_TCP, CM_TCP6, CM_UDS, CM_VSOCK, CM_VSOCKMULT };
+
 int create_tcp_server(bool ipv6, const char *host, const char *port);
 
 int create_tcp_client(bool ipv6, const char *host, const char *port);

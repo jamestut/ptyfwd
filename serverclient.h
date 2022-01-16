@@ -1,5 +1,6 @@
 #pragma once
 
+#include "utils.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -11,4 +12,4 @@ struct server_options {
 
 int start_server(int svrfd, struct server_options *opt);
 
-int start_client(int fd);
+int start_client(struct client_conn_options clopt);

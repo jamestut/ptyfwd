@@ -41,6 +41,8 @@ static void handle_pollin_stfd();
 
 static void set_commfd_error();
 
+static void redirect_persistent_session(int commfd, struct session *sess);
+
 static bool forward_pty_to_client();
 
 static void set_winsize(int fd, const struct winch_data *data);
@@ -136,7 +138,8 @@ int start_server(int svrfd, struct server_options *opt) {
           proto_write(commfd, 0, DT_CLOSE, NULL);
           goto on_error;
         }
-        // TODO: follow up action
+        redirect_persistent_session(commfd, sess);
+        continue;
       } else if (recv_len) {
         // unknown sessid size
         warnx("Invalid session ID request.");
@@ -541,6 +544,36 @@ static void set_commfd_error() {
   }
 }
 
+static void redirect_persistent_session(int commfd, struct session *sess) {
+  // fd needs sizeof(int)
+  uint8_t cmsghdrdata[CMSG_SPACE(sizeof(int))];
+  struct cmsghdr *cmsg = (struct cmsghdr *)cmsghdrdata;
+
+  // sendmsg requires something to be sent/received on main channel
+  char dummy = 'a';
+  struct iovec iov;
+  iov.iov_base = &dummy;
+  iov.iov_len = sizeof(dummy);
+
+  cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+  cmsg->cmsg_level = SOL_SOCKET;
+  cmsg->cmsg_type = SCM_RIGHTS;
+  // transfer ("dup2") commfd to worker
+  *((int *)CMSG_DATA(cmsg)) = commfd;
+
+  struct msghdr msg;
+  memset(&msg, 0, sizeof(msg));
+  msg.msg_control = cmsg;
+  msg.msg_controllen = sizeof(cmsghdrdata);
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+
+  if (sendmsg(sess->fdpair[0], &msg, 0) < 0) {
+    warn("Error transferring socket to worker");
+  }
+  close(commfd);
+}
+
 static bool forward_pty_to_client() {
   assert (worker.commfd >= 0);
   size_t offset = 0;
@@ -557,5 +590,6 @@ static bool forward_pty_to_client() {
     }
     offset += to_send;
   }
+  ptym_buff.size = 0;
   return true;
 }

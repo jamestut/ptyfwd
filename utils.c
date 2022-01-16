@@ -77,3 +77,30 @@ void populate_poll(struct pollfd *pfds, uint8_t *idx, int fd, int events) {
   tgt->events = events;
   tgt->revents = 0;
 }
+
+int create_client(struct client_conn_options *opt) {
+  int commfd;
+  switch (opt->connmode) {
+  case CM_TCP:
+  case CM_TCP6:
+    commfd = create_tcp_client(opt->connmode == CM_TCP6,
+      opt->targetaddr, opt->port);
+    break;
+  case CM_UDS:
+    commfd = create_uds_client(opt->targetaddr);
+    break;
+  #ifdef __linux__
+  case CM_VSOCK:
+    commfd = create_vsock_client(opt->cid, opt->port);
+    break;
+  #endif
+  case CM_VSOCKMULT:
+    commfd = create_vsock_mult_client(opt->targetaddr, opt->cid, opt->port);
+    break;
+  default:
+    warnx("Unsupported connection mode.");
+    errno = EINVAL;
+    return -1;
+  }
+  return commfd;
+}

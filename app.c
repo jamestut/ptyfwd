@@ -9,8 +9,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-enum conn_mode { CM_NONE, CM_TCP, CM_TCP6, CM_UDS, CM_VSOCK, CM_VSOCKMULT };
-
 static bool read_cookie(const char *cookiefile);
 
 int main(int argc, char **argv) {
@@ -122,29 +120,13 @@ int main(int argc, char **argv) {
       err(1, "Error creating socket server");
     return start_server(svrfd, &svropt);
   } else {
-    int commfd;
-    switch (connmode) {
-    case CM_TCP:
-    case CM_TCP6:
-      commfd = create_tcp_client(connmode == CM_TCP6, targetaddr, port);
-      break;
-    case CM_UDS:
-      commfd = create_uds_client(targetaddr);
-      break;
-#ifdef __linux__
-    case CM_VSOCK:
-      commfd = create_vsock_client(cid, port);
-      break;
-#endif
-    case CM_VSOCKMULT:
-      commfd = create_vsock_mult_client(targetaddr, cid, port);
-      break;
-    default:
-      goto usage;
-    }
-    if (commfd < 0)
-      err(1, "Error connecting to server");
-    return start_client(commfd);
+    struct client_conn_options clopt = {
+      .connmode = connmode,
+      .targetaddr = targetaddr,
+      .cid = cid,
+      .port = port,
+    };
+    return start_client(clopt);
   }
 
 usage:
