@@ -29,7 +29,7 @@ bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
   // if they did so, they must have forgotten to do EOF checks or things like that
   assert(len);
 
-  int done = 0;
+  UINT done = 0;
   while (done < len) {
     int currdone = iswrite ? write(fd, (void *)((uintptr_t)buff + done), len - done)
                            : read(fd, (void *)((uintptr_t)buff + done), len - done);
@@ -65,4 +65,15 @@ void wait_debugger() {
   bool stop = false;
   while (!stop)
     sleep(1);
+}
+
+void populate_poll(struct pollfd *pfds, uint8_t *idx, int fd, int events) {
+  if (fd < 0) {
+    return;
+  }
+
+  struct pollfd *tgt = pfds + (*idx)++;
+  tgt->fd = fd;
+  tgt->events = events;
+  tgt->revents = 0;
 }

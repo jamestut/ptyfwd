@@ -1,6 +1,7 @@
 #include "common.h"
 #include "global.h"
 #include "socks.h"
+#include "serverclient.h"
 #include <err.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,10 +11,6 @@
 
 enum conn_mode { CM_NONE, CM_TCP, CM_TCP6, CM_UDS, CM_VSOCK, CM_VSOCKMULT };
 
-int start_server(int svrfd, const char *launchreq);
-
-int start_client(int fd);
-
 static bool read_cookie(const char *cookiefile);
 
 int main(int argc, char **argv) {
@@ -22,15 +19,19 @@ int main(int argc, char **argv) {
   char *targetaddr = NULL;
   char *cid = NULL;
   char *port = NULL;
-  char *launchreq = NULL;
   char *cookiefile = NULL;
 
+  struct server_options svropt = {
+    .sessionsave = false,
+    .ptybufsz = DEFAULT_PTYBUFSZ,
+  };
+
   char c;
-  while ((c = getopt(argc, argv, "s:c:h:u:v:p:")) != EOF) {
+  while ((c = getopt(argc, argv, "s:c:h:u:v:p:mb:")) != EOF) {
     switch (c) {
     case 's':
       servermode = true;
-      launchreq = optarg;
+      svropt.launchreq = optarg;
       break;
     case 'h': // implies TCP mode
       targetaddr = optarg;
@@ -68,9 +69,25 @@ int main(int argc, char **argv) {
     case 'c':
       cookiefile = optarg;
       break;
+    case 'm':
+      svropt.sessionsave = true;
+      break;
+    case 'b':
+      if (!sscanf(optarg, "%lu", &svropt.ptybufsz)) {
+        goto usage;
+      }
+      break;
     default:
       goto usage;
     }
+  }
+
+  if (svropt.ptybufsz < BUFF_SIZE) {
+    errx(1, "PTY buffer too small. Minimum: %llu bytes.", BUFF_SIZE);
+  }
+
+  if (svropt.sessionsave && !servermode) {
+    goto usage;
   }
 
   if (cookiefile) {
@@ -103,7 +120,7 @@ int main(int argc, char **argv) {
     }
     if (svrfd < 0)
       err(1, "Error creating socket server");
-    return start_server(svrfd, launchreq);
+    return start_server(svrfd, &svropt);
   } else {
     int commfd;
     switch (connmode) {
@@ -153,6 +170,11 @@ usage:
   puts("  Enables authentication and specify a cookie file for authentication.");
   printf("  Cookie file must be within %u and %u bytes in size.\n", COOKIE_MIN_SIZE,
     COOKIE_MAX_SIZE);
+  puts(" -m");
+  puts("  Activate persistent session mode (only for server mode).");
+  puts(" -b");
+  printf("  Specify PTY buffer size for server mode (default = %llu)\n",
+    DEFAULT_PTYBUFSZ);
   return 0;
 }
 

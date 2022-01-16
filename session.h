@@ -4,6 +4,7 @@
 #include <unistd.h>
 
 #define INVALID_SESSION_ID 0ULL
+#define SESSID_SIZE (sizeof(uint64_t))
 
 struct session {
   uint64_t id;

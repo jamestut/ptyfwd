@@ -1,6 +1,7 @@
 #include "protocol.h"
 #include "utils.h"
 #include "global.h"
+#include "serverclient.h"
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -216,9 +217,10 @@ static void install_signal_handlers() {
   act.sa_handler = sighandler;
 
   int sig_to_handle[] = {SIGINT, SIGTERM, SIGWINCH, SIGHUP};
-  for (int i = 0; i < sizeof(sig_to_handle) / sizeof(int); ++i) {
-    if (sigaction(sig_to_handle[i], &act, NULL) < 0)
+  for (UINT i = 0; i < sizeof(sig_to_handle) / sizeof(int); ++i) {
+    if (sigaction(sig_to_handle[i], &act, NULL) < 0) {
       err(1, "Error installing handler for signal %d", sig_to_handle[i]);
+    }
   }
 }
 

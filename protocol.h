@@ -17,7 +17,8 @@ enum data_type {
   DT_NONE,      // move on to the next data
   DT_CLOSE,     // request to close/finish session
   DT_REGULAR,   // forward this data as-is to mPTY or stdio
-  DT_WINCH      // window size information
+  DT_WINCH,     // window size information
+  DT_SESSID,    // persistent session id
 };
 
 struct winch_data {
