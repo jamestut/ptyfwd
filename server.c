@@ -105,6 +105,8 @@ int start_server(int svrfd, struct server_options *opt) {
     }
   }
 
+  warnx("Server started. PID of main process = %d\n", getpid());
+
   for (;;) {
     int commfd = accept(svrfd, NULL, NULL);
     if (commfd < 0) {
