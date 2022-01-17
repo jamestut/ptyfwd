@@ -1,6 +1,6 @@
 #include "session.h"
 #include "simplemap.h"
-#include "common.h"
+#include "utils.h"
 #include <stdlib.h>
 #include <err.h>
 #include <unistd.h>
@@ -24,7 +24,7 @@ uint64_t new_session(struct session **newsess) {
   uint64_t sessid = INVALID_SESSION_ID;
 
   for (;;) {
-    arc4random_buf(&sessid, sizeof(sessid));
+    random_fill(&sessid, sizeof(sessid));
     void *dummy;
     if (sessid != INVALID_SESSION_ID && !simplemap_get(map_sessid, sessid, &dummy)) {
       struct session *sess = malloc(sizeof(struct session));

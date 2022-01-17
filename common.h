@@ -1,12 +1,7 @@
 #pragma once
 
-#ifdef __linux__
-// for arc4random
-#include <bsd/stdlib.h>
-#endif
-
-#define BUFF_SIZE 65536ULL
-_Static_assert(BUFF_SIZE >= 65536ULL, "Buffer size needs to be able to fit 16 bit length");
+#define BUFF_SIZE 65535ULL
+_Static_assert(BUFF_SIZE >= 65535ULL, "Buffer size needs to be able to fit 16 bit length");
 
 #define DEFAULT_PTYBUFSZ 1048576ULL
 

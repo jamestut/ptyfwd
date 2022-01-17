@@ -134,7 +134,7 @@ int start_server(int svrfd, struct server_options *opt) {
         uint64_t sessid = *((uint64_t *)rbuff);
         struct session *sess = get_session(sessid);
         if (!sess) {
-          warnx("Requested session ID %llx not found.", sessid);
+          warnx("Requested session ID %llx not found.", (unsigned long long)sessid);
           proto_write(commfd, 0, DT_CLOSE, NULL);
           goto on_error;
         }
@@ -316,7 +316,7 @@ static bool negotiate(int fd) {
 
 static bool authenticate(int fd) {
   uint8_t nonce[NONCE_SIZE];
-  arc4random_buf(nonce, sizeof(nonce));
+  random_fill(nonce, sizeof(nonce));
 
   // we generate the correct answer ourselves first
   // answer is SHA1(nonce + cookie)
@@ -478,6 +478,7 @@ static void handle_pollin_ptym() {
       worker.errmsg = "mPTY read error";
     }
     worker.stop_loop = true;
+    return;
   }
   ptym_buff.size += rd;
 
@@ -575,7 +576,9 @@ static void redirect_persistent_session(int commfd, struct session *sess) {
 }
 
 static bool forward_pty_to_client() {
-  assert (worker.commfd >= 0);
+  if (worker.commfd < 0) {
+    return false;
+  }
   size_t offset = 0;
   while (offset < ptym_buff.size) {
     size_t to_send = ptym_buff.size - offset;

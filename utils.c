@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stdlib.h>
+#include <time.h>
 
 bool rw_all(bool iswrite, int fd, const void *buff, UINT len);
 
@@ -60,13 +62,6 @@ bool rw_all(bool iswrite, int fd, const void *buff, UINT len) {
   return true;
 }
 
-void wait_debugger() {
-  printf("Please attach debugger to PID %d\n", getpid());
-  bool stop = false;
-  while (!stop)
-    sleep(1);
-}
-
 void populate_poll(struct pollfd *pfds, uint8_t *idx, int fd, int events) {
   if (fd < 0) {
     return;
@@ -103,4 +98,49 @@ int create_client(struct client_conn_options *opt) {
     return -1;
   }
   return commfd;
+}
+
+#ifdef __APPLE__
+void random_fill(void *buff, size_t size) {
+  arc4random_buf(buff, size);
+}
+#endif
+
+#ifdef __linux__
+void random_fill(void *buff, size_t size) {
+  static int fd = -2;
+  if (fd == -2) {
+    fd = open("/dev/urandom", O_RDONLY);
+  }
+  if (fd == -1) {
+    srand(time(0));
+    fd = -3;
+  }
+
+  uint8_t *cbuff = buff;
+  if (fd > 0) {
+    for (size_t offset = 0; offset < size;) {
+      size_t to_read = size - offset;
+      to_read = to_read > 0xFFFF ? 0xFFFF : to_read;
+      if (!read_all(fd, cbuff + offset, to_read)) {
+        close(fd);
+        fd = -1;
+        random_fill(buff, size);
+        return;
+      }
+      offset += to_read;
+    }
+  } else {
+    for (size_t i = 0; i < size; ++i) {
+      cbuff[i] = rand() % 0xFF;
+    }
+  }
+}
+#endif
+
+void wait_debugger() {
+  printf("Please attach debugger to PID %d\n", getpid());
+  bool stop = false;
+  while (!stop)
+    sleep(1);
 }

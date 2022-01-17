@@ -4,6 +4,7 @@
 #include "serverclient.h"
 #include "session.h"
 #include <err.h>
+#include <stdio.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -35,11 +36,15 @@ static void handle_pollin_sock();
 
 static void handle_pollin_stdin();
 
+static void handle_sock_error();
+
 static bool client_write(uint16_t len, enum data_type type, void *buff);
 
 static bool client_read(uint16_t *len, enum data_type *type, void *buff);
 
-static bool client_rw(bool write, uint16_t *len, enum data_type *type, void *buff);
+enum client_rw_mode { CRW_READ, CRW_WRITE, CRW_ERROR };
+
+static bool client_rw(enum client_rw_mode mode, uint16_t *len, enum data_type *type, void *buff);
 
 // signal handler flags
 static struct {
@@ -330,7 +335,11 @@ static int client_loop() {
         continue;
       int srcfd = pfds[i].fd;
       if (srcfd == client.fd) {
-        handle_pollin_sock();
+        if (pfds[i].revents & (POLLERR | POLLHUP)) {
+          handle_sock_error();
+        } else {
+          handle_pollin_sock();
+        }
       } else if (srcfd == 0) {
         handle_pollin_stdin();
       } else {
@@ -341,8 +350,13 @@ static int client_loop() {
     }
   }
 
-  if (client.errmsg)
-    warn("%s", client.errmsg);
+  if (client.errmsg) {
+    if (errno) {
+      warn("%s", client.errmsg);
+    } else {
+      warnx("%s", client.errmsg);
+    }
+  }
 
   // don't forget to let server know if we're stopping
   proto_write(client.fd, 0, DT_CLOSE, NULL);
@@ -362,9 +376,13 @@ static void handle_pollin_sock() {
 
   switch (pdatatype) {
   case DT_REGULAR:
-    // forward to stdout
-    if (!write_all(1, rbuff, rdlen)) {
-      client.errmsg = "stdout write error";
+    // forward to stdout if we receive anything other than EOF marker
+    if (rdlen) {
+      if (!write_all(1, rbuff, rdlen)) {
+        client.errmsg = "stdout write error";
+      }
+    } else {
+      warnx("Received zero length DT_REGULAR. This is server's bug.");
     }
     break;
   case DT_CLOSE:
@@ -388,36 +406,62 @@ static void handle_pollin_stdin() {
   client_write(rd, DT_REGULAR, rbuff);
 }
 
+static void handle_sock_error() {
+  client_rw(CRW_ERROR, NULL, NULL, NULL);
+}
+
 static bool client_write(uint16_t len, enum data_type type, void *buff) {
-  return client_rw(true, &len, &type, buff);
+  return client_rw(CRW_WRITE, &len, &type, buff);
 }
 
 static bool client_read(uint16_t *len, enum data_type *type, void *buff) {
-  return client_rw(false, len, type, buff);
+  return client_rw(CRW_READ, len, type, buff);
 }
 
-static bool client_rw(bool write, uint16_t *len, enum data_type *type, void *buff) {
+static bool client_rw(enum client_rw_mode mode, uint16_t *len, enum data_type *type, void *buff) {
   bool status = false;
+  bool warning_shown = false;
   do {
     if (client.fd >= 0) {
-      if (write) {
-        status = proto_write(client.fd, *len, *type, buff);
-      } else {
+      if (warning_shown) {
+        fputs("ptyfwd: Connection reestablished.\r\n", stderr);
+        if (mode == CRW_ERROR) {
+          // no need to retry as we don't have any request here
+          return true;
+        }
+      }
+      switch (mode) {
+      case CRW_READ:
         status = proto_read(client.fd, len, type, buff);
+        break;
+      case CRW_WRITE:
+        status = proto_write(client.fd, *len, *type, buff);
+        break;
+      case CRW_ERROR:
+        break;
       }
     }
 
     if (!status) {
       if (client.sessid != INVALID_SESSION_ID) {
-        warnx("Connection to server failed. Retrying ...");
-        close(client.fd);
+        if (!warning_shown) {
+          warning_shown = true;
+          fputs("ptyfwd: Connection to server failed. Retrying ...\r\n", stderr);
+        }
+        if (client.fd >= 0) {
+          close(client.fd);
+        }
         client.fd = create_client(&client.clopt);
         if (client.fd < 0) {
           // wait a while before we retry to avoid spinning
           sleep(1);
+          continue;
         }
+        negotiate();
+        proto_write(client.fd, SESSID_SIZE, DT_SESSID, &client.sessid);
       } else {
-        client.errmsg = "Connection to server failed and there is no persistent session ID.";
+        fputs("Connection to server failed and there is no persistent session ID. Ending session.\r\n", stderr);
+        client.errmsg = "Connection failed";
         return false;
       }
     }
