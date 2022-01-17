@@ -67,6 +67,8 @@ struct {
   const char *errmsg;
 } worker = {};
 
+struct server_options svropt;
+
 static bool negotiate(int fd);
 
 static bool authenticate(int fd);
@@ -74,6 +76,8 @@ static bool authenticate(int fd);
 void *map_pid;
 
 int start_server(int svrfd, struct server_options *opt) {
+  svropt = *opt;
+
   if (listen(svrfd, LISTEN_BACKLOG) < 0) {
     warn("Listen error");
     return 1;
@@ -85,16 +89,15 @@ int start_server(int svrfd, struct server_options *opt) {
     err(1, "Error allocating PTYm buffer");
   }
 
-  if (opt->sessionsave) {
-    // install signal handler to detect if child server exits.
-    // this way we know on when to remove session data.
-    struct sigaction act = {0};
-    sigfillset(&act.sa_mask);
-    act.sa_handler = sigchld_handler;
-    if (sigaction(SIGCHLD, &act, NULL) < 0) {
-      err(1, "Error installing SIGCHLD handler");
-    }
+  // install signal handler to detect if child server exits.
+  // this way we know on when to remove session data.
+  struct sigaction act = {0};
+  act.sa_handler = sigchld_handler;
+  if (sigaction(SIGCHLD, &act, NULL) < 0) {
+    err(1, "Error installing SIGCHLD handler");
+  }
 
+  if (opt->sessionsave) {
     // pid mapping
     map_pid = simplemap_init();
     if (!map_pid) {
@@ -193,7 +196,6 @@ int start_server(int svrfd, struct server_options *opt) {
       // child will do all the job. no return.
       // uninstall SIGCHLD handler
       struct sigaction act = {0};
-      sigfillset(&act.sa_mask);
       act.sa_handler = SIG_IGN;
       sigaction(SIGCHLD, &act, NULL);
       // let client know their persistent session ID (if any)
@@ -224,23 +226,26 @@ on_error:
 }
 
 static void sigchld_handler(int sig) {
-  if (sig != SIGCHLD) {
-    return;
-  }
+  (void)(sig);
+
   int status;
-  pid_t stopped = waitpid(-1, &status, WNOHANG);
-  if (stopped < 0) {
-    return;
-  }
+  for (;;) {
+    pid_t stopped = waitpid(-1, &status, WNOHANG);
+    if (stopped < 0) {
+      return;
+    }
 
-  struct session *sess;
-  if (!simplemap_get(map_pid, stopped, (void **)&sess)) {
-    warnx("Received SIGCHLD on unregistered PID %d!", stopped);
-    return;
-  }
+    if (svropt.sessionsave) {
+      struct session *sess;
+      if (!simplemap_get(map_pid, stopped, (void **)&sess)) {
+        warnx("Received SIGCHLD on unregistered PID %d!", stopped);
+        return;
+      }
 
-  delete_session(sess->id);
-  simplemap_del(map_pid, stopped);
+      delete_session(sess->id);
+      simplemap_del(map_pid, stopped);
+    }
+  }
 }
 
 static void server_worker_init(char *launchreq) {
