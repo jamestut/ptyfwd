@@ -251,7 +251,7 @@ static bool negotiate(int fd) {
 
 static bool authenticate(int fd) {
   uint8_t nonce[NONCE_SIZE];
-  arc4random_buf(nonce, sizeof(nonce));
+  random_fill(nonce, sizeof(nonce));
 
   // we generate the correct answer ourselves first
   // answer is SHA1(nonce + cookie)
