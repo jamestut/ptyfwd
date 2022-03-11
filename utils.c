@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <time.h>
 
 bool rw_all(bool iswrite, int fd, const void *buff, UINT len);
 
