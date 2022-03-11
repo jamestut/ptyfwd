@@ -145,7 +145,7 @@ usage:
   puts("  Specify Unix socket mode as well as the socket path to connect/listen.");
   puts(" -v <cid>");
   puts("  Specify the CID of the VSOCK. Requires '-p'.");
-  puts("  Use together with '-u' and '-c' to connect to a VSOCK multiplexer UDS.");
+  puts("  Use together with '-u' to connect to a VSOCK multiplexer UDS.");
   puts("  Plain VSOCK without multiplexer is supported only on Linux.");
   puts(" -p <port>");
   puts("  Specify port number.");
